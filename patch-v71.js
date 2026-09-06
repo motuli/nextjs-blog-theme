@@ -11,6 +11,7 @@
     .agent-source.local{background:#edf2f5;color:#5e707d;border-color:#d8e0e5}
     .agent-source.fallback{background:#fff4df;color:#9a6200;border-color:#f3d99b}
     .agent-source.pending{background:#e8f7fa;color:#167386;border-color:#c9e9ef}
+    .agent-source.idle{background:#f6f8fa;color:#7d8a93;border-color:#e5eaee}
     .agent-source[hidden]{display:none!important}`;
   document.head.appendChild(css);
 
@@ -26,6 +27,7 @@
     if(mode==='ai') return '🟢 IA REAL' + (model ? ' · '+model : '');
     if(mode==='fallback') return '🟠 FALLBACK LOCAL';
     if(mode==='pending') return '◌ A VERIFICAR ORIGEM';
+    if(mode==='idle') return '○ AINDA NÃO EXECUTADO';
     return '⚪ MOTOR LOCAL';
   }
   function setSource(role, mode, detail=''){
@@ -39,7 +41,8 @@
       ai:'Intervenção produzida por uma chamada à API OpenAI.',
       local:'Intervenção produzida pelo motor local da aplicação.',
       fallback:'A chamada à IA falhou e o SCRIPTORIA ativou o motor local.',
-      pending:'A confirmar a origem desta intervenção.'
+      pending:'A confirmar a origem desta intervenção.',
+      idle:'Este agente ainda não foi executado nesta interação.'
     }[mode]||'');
   }
   function copySource(role,targetId){
@@ -52,7 +55,7 @@
   function addBadge(id, beforeId){
     if(document.getElementById(id)) return;
     const before=document.getElementById(beforeId); if(!before) return;
-    const b=document.createElement('div'); b.id=id; b.className='agent-source local'; b.hidden=true; b.textContent='⚪ MOTOR LOCAL';
+    const b=document.createElement('div'); b.id=id; b.className='agent-source idle'; b.hidden=true; b.textContent='○ AINDA NÃO EXECUTADO';
     before.parentNode.insertBefore(b,before);
   }
   for(let i=1;i<=6;i++) addBadge('src'+i,'o'+i);
@@ -110,6 +113,34 @@
   wrap('runEvidence','evidence'); wrap('runEval','evaluate'); wrap('runMeta','metacognition');
   wrap('generateAdvice','advisor'); wrap('generateClassPlan','class_planner');
   wrap('planRoute','orchestrator'); wrap('runProgressus','progressus');
+
+  // Antes de existir uma execução, nenhuma etiqueta deve sugerir que foi usado motor local.
+  function normalizeIdleState(){
+    const routeReason=document.getElementById('routeReason');
+    const routeBox=document.querySelector('.route-box, .route-card, .route-proposal');
+    const routeText=((routeReason?.textContent||'')+' '+(routeBox?.textContent||'')).toLowerCase();
+    const orch=document.getElementById('orchestratorSource');
+    if(orch && (routeText.includes('ainda não planeada') || routeText.includes('carrega em “planear rota”') || routeText.includes('carrega em "planear rota"'))){
+      delete agentSource.orchestrator;
+      orch.hidden=true;
+      orch.className='agent-source idle';
+      orch.textContent='○ AINDA NÃO EXECUTADO';
+    }
+    for(let i=1;i<=6;i++){
+      const status=document.getElementById('s'+i);
+      const badge=document.getElementById('src'+i);
+      const txt=(status?.textContent||'').trim().toLowerCase();
+      if(badge && (txt==='aguarda' || txt==='disponível' || txt==='')){
+        delete agentSource[[null,'diagnostic','critic','tutor','evidence','evaluate','metacognition'][i]];
+        badge.hidden=true;
+        badge.className='agent-source idle';
+        badge.textContent='○ AINDA NÃO EXECUTADO';
+      }
+    }
+  }
+  normalizeIdleState();
+  setTimeout(normalizeIdleState,250);
+  setTimeout(normalizeIdleState,1200);
 
   // Propaga a transparência para o que o aluno recebe, sem alterar o controlo do professor.
   const approveOriginal=window.approveStep;
