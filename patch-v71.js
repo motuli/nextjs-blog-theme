@@ -12,7 +12,10 @@
     .agent-source.fallback{background:#fff4df;color:#9a6200;border-color:#f3d99b}
     .agent-source.pending{background:#e8f7fa;color:#167386;border-color:#c9e9ef}
     .agent-source.idle{background:#f6f8fa;color:#7d8a93;border-color:#e5eaee}
-    .agent-source[hidden]{display:none!important}`;
+    .agent-source[hidden]{display:none!important}
+    .agent-source-detail{margin:-2px 0 12px;padding:9px 11px;border-radius:10px;font-size:11px;line-height:1.45;background:#fff8e9;color:#825300;border:1px solid #f2ddb0}
+    .agent-source-detail.ai{background:#eefbf5;color:#176747;border-color:#cfeadd}
+    .agent-source-detail[hidden]{display:none!important}`;
   document.head.appendChild(css);
 
   const sourceTargets = {
@@ -20,6 +23,7 @@
     evaluate:'src5', metacognition:'src6', advisor:'advisorSource',
     class_planner:'classPlanSource', orchestrator:'orchestratorSource', progressus:'progressusSource'
   };
+  const detailTargets = {};
   const agentSource = window.SCRIPTORIA_AGENT_SOURCE = window.SCRIPTORIA_AGENT_SOURCE || {};
 
   function sourceText(mode){
@@ -29,6 +33,17 @@
     if(mode==='pending') return '◌ A VERIFICAR ORIGEM';
     if(mode==='idle') return '○ AINDA NÃO EXECUTADO';
     return '⚪ MOTOR LOCAL';
+  }
+  function ensureDetail(role, badge){
+    if(detailTargets[role] && document.getElementById(detailTargets[role])) return document.getElementById(detailTargets[role]);
+    const id=(sourceTargets[role]||role+'Source')+'Detail';
+    detailTargets[role]=id;
+    let d=document.getElementById(id);
+    if(!d && badge){
+      d=document.createElement('div'); d.id=id; d.className='agent-source-detail'; d.hidden=true;
+      badge.parentNode.insertBefore(d,badge.nextSibling);
+    }
+    return d;
   }
   function setSource(role, mode, detail=''){
     agentSource[role] = {mode, detail, at:new Date().toISOString(), model:(window.AI_ENGINE&&window.AI_ENGINE.model)||null};
@@ -44,6 +59,16 @@
       pending:'A confirmar a origem desta intervenção.',
       idle:'Este agente ainda não foi executado nesta interação.'
     }[mode]||'');
+    const d=ensureDetail(role,el);
+    if(d){
+      if((mode==='fallback' || mode==='local') && detail){
+        d.hidden=false; d.className='agent-source-detail'; d.textContent='Motivo: '+detail;
+      }else if(mode==='ai'){
+        d.hidden=true; d.textContent='';
+      }else{
+        d.hidden=true; d.textContent='';
+      }
+    }
   }
   function copySource(role,targetId){
     const src=agentSource[role], el=document.getElementById(targetId);
@@ -66,7 +91,7 @@
   addBadge('studentTutorSource','studentTutor');
   addBadge('studentAdviceSource','studentAdvice');
 
-  // Marca a origem a partir da chamada real ao backend.
+  // Marca a origem a partir da chamada real ao backend e mostra o erro seguro devolvido pelo servidor.
   const nativeFetch = window.fetch.bind(window);
   window.fetch = async function(input, init={}){
     let role=null;
@@ -80,7 +105,18 @@
     }catch(_){ }
     try{
       const res=await nativeFetch(input,init);
-      if(role) setSource(role,res.ok?'ai':'fallback',res.ok?'':'Backend devolveu HTTP '+res.status+'.');
+      if(role){
+        if(res.ok){
+          setSource(role,'ai');
+        }else{
+          let detail='Backend devolveu HTTP '+res.status+'.';
+          try{
+            const d=await res.clone().json();
+            if(d?.error) detail=d.error+(d?.code?' ['+d.code+']':'');
+          }catch(_){ }
+          setSource(role,'fallback',detail);
+        }
+      }
       return res;
     }catch(err){
       if(role) setSource(role,'fallback',err?.message||String(err));
@@ -98,9 +134,7 @@
       else setSource(role,'pending');
       try{
         const result=await original.apply(this,args);
-        // Se a função não fez qualquer POST ao backend, então executou localmente.
         if(agentSource[role]?.mode==='pending' && agentSource[role]?.at!==before) setSource(role,'local');
-        // O motor híbrido central desativa AI_ENGINE quando faz fallback.
         if(role!=='orchestrator' && role!=='advisor' && role!=='class_planner' && role!=='progressus' && hasAI && window.AI_ENGINE && !window.AI_ENGINE.available && agentSource[role]?.mode==='ai'){
           setSource(role,'fallback',window.AI_ENGINE.lastError||'A chamada à IA não concluiu a intervenção.');
         }
@@ -114,7 +148,6 @@
   wrap('generateAdvice','advisor'); wrap('generateClassPlan','class_planner');
   wrap('planRoute','orchestrator'); wrap('runProgressus','progressus');
 
-  // Antes de existir uma execução, nenhuma etiqueta deve sugerir que foi usado motor local.
   function normalizeIdleState(){
     const routeReason=document.getElementById('routeReason');
     const routeBox=document.querySelector('.route-box, .route-card, .route-proposal');
@@ -123,6 +156,7 @@
     if(orch && (routeText.includes('ainda não planeada') || routeText.includes('carrega em “planear rota”') || routeText.includes('carrega em "planear rota"'))){
       delete agentSource.orchestrator;
       orch.hidden=true;
+      const d=document.getElementById('orchestratorSourceDetail'); if(d) d.hidden=true;
       orch.className='agent-source idle';
       orch.textContent='○ AINDA NÃO EXECUTADO';
     }
@@ -131,8 +165,10 @@
       const badge=document.getElementById('src'+i);
       const txt=(status?.textContent||'').trim().toLowerCase();
       if(badge && (txt==='aguarda' || txt==='disponível' || txt==='')){
-        delete agentSource[[null,'diagnostic','critic','tutor','evidence','evaluate','metacognition'][i]];
+        const role=[null,'diagnostic','critic','tutor','evidence','evaluate','metacognition'][i];
+        delete agentSource[role];
         badge.hidden=true;
+        const d=document.getElementById('src'+i+'Detail'); if(d) d.hidden=true;
         badge.className='agent-source idle';
         badge.textContent='○ AINDA NÃO EXECUTADO';
       }
@@ -142,7 +178,6 @@
   setTimeout(normalizeIdleState,250);
   setTimeout(normalizeIdleState,1200);
 
-  // Propaga a transparência para o que o aluno recebe, sem alterar o controlo do professor.
   const approveOriginal=window.approveStep;
   if(typeof approveOriginal==='function'){
     window.approveStep=async function(n,...args){
@@ -156,7 +191,6 @@
     window.sendAdviceToStudent=function(...args){ const r=adviceOriginal.apply(this,args); copySource('advisor','studentAdviceSource'); return r; };
   }
 
-  // Identidade de manutenção: evolução funcional, não uma nova arquitetura conceptual.
   const kicker=document.querySelector('.hero-card.hero-copy .kicker');
   if(kicker) kicker.textContent='MVP v7.1 · CICLOS ADAPTATIVOS · TRANSPARÊNCIA DO MOTOR · PROGRESSUS';
   const footer=document.querySelector('.footer');
