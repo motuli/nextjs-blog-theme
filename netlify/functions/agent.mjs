@@ -72,16 +72,18 @@ function outputText(d){
 
 export default async(request)=>{
  const headers={"Content-Type":"application/json; charset=utf-8","Cache-Control":"no-store"};
- if(request.method==="GET")return new Response(JSON.stringify({configured:!!process.env.OPENAI_API_KEY,model:process.env.OPENAI_MODEL||"gpt-5.6-terra"}),{status:200,headers});
+ const apiKey=Netlify.env.get("OPENAI_API_KEY");
+ const configuredModel=Netlify.env.get("OPENAI_MODEL")||"gpt-5.6-terra";
+ if(request.method==="GET")return new Response(JSON.stringify({configured:!!apiKey,model:configuredModel}),{status:200,headers});
  if(request.method!=="POST")return new Response(JSON.stringify({error:"Método não permitido."}),{status:405,headers});
- if(!process.env.OPENAI_API_KEY)return new Response(JSON.stringify({error:"OPENAI_API_KEY não configurada."}),{status:503,headers});
+ if(!apiKey)return new Response(JSON.stringify({error:"OPENAI_API_KEY não configurada."}),{status:503,headers});
  let b;try{b=await request.json()}catch{return new Response(JSON.stringify({error:"JSON inválido."}),{status:400,headers})}
  if(!ALLOWED.has(String(b.role||"")))return new Response(JSON.stringify({error:"Agente inválido."}),{status:400,headers});
- const model=process.env.OPENAI_MODEL||"gpt-5.6-terra";
+ const model=configuredModel;
  const wantsJson=b.role==="orchestrator";
  const payload={model,store:false,instructions:COMMON+"\n\n"+ROLE[b.role],input:makeInput(b),reasoning:{effort:"low"},text:{verbosity:"low"},max_output_tokens:1000,metadata:{app:"scriptoria-v7",agent:b.role}};
  try{
-  const r=await fetch("https://api.openai.com/v1/responses",{method:"POST",headers:{"Authorization":"Bearer "+process.env.OPENAI_API_KEY,"Content-Type":"application/json"},body:JSON.stringify(payload)});
+  const r=await fetch("https://api.openai.com/v1/responses",{method:"POST",headers:{"Authorization":"Bearer "+apiKey,"Content-Type":"application/json"},body:JSON.stringify(payload)});
   const d=await r.json();
   if(!r.ok)return new Response(JSON.stringify({error:"A IA não conseguiu concluir esta análise."}),{status:502,headers});
   const text=outputText(d);if(!text)return new Response(JSON.stringify({error:"Resposta sem texto."}),{status:502,headers});
@@ -94,3 +96,5 @@ export default async(request)=>{
   return new Response(JSON.stringify({text,model:d.model||model,usage:d.usage||null}),{status:200,headers})
  }catch(e){return new Response(JSON.stringify({error:"Erro de ligação ao serviço de IA."}),{status:502,headers})}
 };
+
+export const config={path:"/api/agent"};
