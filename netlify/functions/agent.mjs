@@ -14,8 +14,7 @@ O objetivo final é retirar progressivamente o apoio quando existem evidências 
 const ROLE={
 orchestrator:`Decide os agentes necessários entre diagnostic, critic, tutor, evidence, advisor, class_planner.
 Podes escolher nenhum agente se a melhor decisão for autonomia primeiro.
-Devolve APENAS JSON:
-{"route":["diagnostic","tutor"],"reason":"...","autonomy":62,"intensity":"mid"}
+A rota deve ser pedagogicamente parcimoniosa: ativa apenas os agentes necessários.
 intensity: low, mid ou high.`,
 diagnostic:`Analisa a produção inicial sem reescrever. Dá 1 ponto forte, 2 prioridades e 1 pergunta de regresso ao texto.`,
 critic:`Audita o diagnóstico. Procura falta de prova, sobreinterpretação e tentativa de escrever pelo aluno. Máximo 3 observações. Termina com VEREDITO.`,
@@ -41,6 +40,23 @@ Regras:
 - se houver regressão, recomenda apoio mais estruturado temporário;
 - ao atingir o número-alvo de sessões, recomenda tarefa de transferência sem IA;
 - nunca rotules o aluno.`
+};
+
+const ORCHESTRATOR_SCHEMA={
+ type:"json_schema",
+ name:"scriptoria_orchestrator_route",
+ strict:true,
+ schema:{
+  type:"object",
+  additionalProperties:false,
+  properties:{
+   route:{type:"array",items:{type:"string",enum:["diagnostic","critic","tutor","evidence","advisor","class_planner"]},maxItems:6},
+   reason:{type:"string"},
+   autonomy:{type:"number",minimum:0,maximum:100},
+   intensity:{type:"string",enum:["low","mid","high"]}
+  },
+  required:["route","reason","autonomy","intensity"]
+ }
 };
 
 function clip(x,n){return String(x??"").slice(0,n)}
@@ -69,6 +85,14 @@ function outputText(d){
  const p=[];for(const i of(d.output||[]))if(i?.type==="message")for(const c of(i.content||[]))if(c?.type==="output_text"&&typeof c.text==="string")p.push(c.text);
  return p.join("\n").trim()
 }
+function safeApiError(d,status){
+ const code=d?.error?.code||d?.error?.type||"api_error";
+ if(code==="insufficient_quota"||code==="billing_not_active"||code==="billing_hard_limit_reached")return "API OpenAI sem crédito/faturação disponível.";
+ if(code==="invalid_api_key"||code==="authentication_error")return "Chave da API OpenAI inválida ou sem autorização.";
+ if(code==="model_not_found")return "O modelo configurado não está disponível para esta conta API.";
+ if(status===429)return "Limite temporário ou quota da API atingidos.";
+ return "A OpenAI API devolveu um erro ("+status+").";
+}
 
 export default async(request)=>{
  const headers={"Content-Type":"application/json; charset=utf-8","Cache-Control":"no-store"};
@@ -81,17 +105,17 @@ export default async(request)=>{
  if(!ALLOWED.has(String(b.role||"")))return new Response(JSON.stringify({error:"Agente inválido."}),{status:400,headers});
  const model=configuredModel;
  const wantsJson=b.role==="orchestrator";
- const payload={model,store:false,instructions:COMMON+"\n\n"+ROLE[b.role],input:makeInput(b),reasoning:{effort:"low"},text:{verbosity:"low"},max_output_tokens:1000,metadata:{app:"scriptoria-v7",agent:b.role}};
+ const payload={model,store:false,instructions:COMMON+"\n\n"+ROLE[b.role],input:makeInput(b),reasoning:{effort:"low"},text:wantsJson?{verbosity:"low",format:ORCHESTRATOR_SCHEMA}:{verbosity:"low"},max_output_tokens:1000,metadata:{app:"scriptoria-v7.1",agent:b.role}};
  try{
   const r=await fetch("https://api.openai.com/v1/responses",{method:"POST",headers:{"Authorization":"Bearer "+apiKey,"Content-Type":"application/json"},body:JSON.stringify(payload)});
-  const d=await r.json();
-  if(!r.ok)return new Response(JSON.stringify({error:"A IA não conseguiu concluir esta análise."}),{status:502,headers});
+  const d=await r.json().catch(()=>({}));
+  if(!r.ok)return new Response(JSON.stringify({error:safeApiError(d,r.status),code:d?.error?.code||d?.error?.type||null}),{status:502,headers});
   const text=outputText(d);if(!text)return new Response(JSON.stringify({error:"Resposta sem texto."}),{status:502,headers});
   if(wantsJson){
     try{
-      const cleaned=text.replace(/^```json\s*/i,"").replace(/```$/,"").trim();
-      return new Response(JSON.stringify(JSON.parse(cleaned)),{status:200,headers});
-    }catch{return new Response(JSON.stringify({error:"Rota inválida."}),{status:502,headers})}
+      const parsed=JSON.parse(text);
+      return new Response(JSON.stringify({...parsed,model:d.model||model,usage:d.usage||null}),{status:200,headers});
+    }catch{return new Response(JSON.stringify({error:"A rota recebida da IA não pôde ser interpretada."}),{status:502,headers})}
   }
   return new Response(JSON.stringify({text,model:d.model||model,usage:d.usage||null}),{status:200,headers})
  }catch(e){return new Response(JSON.stringify({error:"Erro de ligação ao serviço de IA."}),{status:502,headers})}
